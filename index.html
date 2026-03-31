@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BMS Dashboard</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<style>
+/* =====================  RESET & BASE  =================== */
+*{margin:0;padding:0;box-sizing:border-box;}
+body{
+  font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;
+  background:#0a0e1a;color:#e0e0e0;min-height:100vh;
+  overflow-x:hidden;
+}
+
+/* =====================  ALERT BANNER  =================== */
+#alertBanner{
+  position:fixed;top:0;left:0;right:0;z-index:1000;
+  background:linear-gradient(90deg,#ff1744,#ff5252,#ff1744);
+  background-size:200% 100%;
+  animation:alertSlide 1s linear infinite;
+  color:#fff;text-align:center;padding:14px 20px;
+  font-size:18px;font-weight:bold;display:none;
+  box-shadow:0 4px 20px rgba(255,23,68,.5);
+}
+#alertBanner.show{display:flex;align-items:center;justify-content:center;gap:12px;}
+@keyframes alertSlide{0%{background-position:0% 50%}100%{background-position:200% 50%}}
+#alertBanner span.blink{animation:blinker .5s step-start infinite;}
+@keyframes blinker{50%{opacity:0}}
+
+/* =====================  HEADER  ========================= */
+.header{
+  padding:20px 30px;display:flex;align-items:center;
+  justify-content:space-between;
+  background:linear-gradient(135deg,#0d1321,#1a1f36);
+  border-bottom:2px solid #1e88e5;
+}
+.header h1{font-size:26px;color:#64b5f6;}
+.header h1 span{color:#fdd835;}
+.conn-dot{
+  width:14px;height:14px;border-radius:50%;
+  display:inline-block;margin-right:8px;
+  transition:background .3s;
+}
+.conn-dot.on{background:#00e676;box-shadow:0 0 8px #00e676;}
+.conn-dot.off{background:#ff1744;box-shadow:0 0 8px #ff1744;}
+.status-bar{display:flex;align-items:center;font-size:14px;gap:6px;}
+
+/* =====================  DASHBOARD GRID  ================= */
+.dashboard{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(260px,1fr));
+  gap:16px;padding:20px 24px;max-width:1600px;margin:auto;
+}
+
+/* =====================  CARD  =========================== */
+.card{
+  background:linear-gradient(145deg,#121829,#1a2240);
+  border:1px solid #1e3a5f;border-radius:14px;
+  padding:20px;position:relative;overflow:hidden;
+  transition:transform .25s,box-shadow .25s;
+}
+.card:hover{
+  transform:translateY(-4px);
+  box-shadow:0 8px 30px rgba(30,136,229,.25);
+}
+.card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,#1e88e5,#64b5f6);
+}
+.card.alert-card::before{background:linear-gradient(90deg,#ff1744,#ff5252);}
+.card-label{font-size:12px;text-transform:uppercase;letter-spacing:1.5px;color:#90a4ae;margin-bottom:6px;}
+.card-value{font-size:32px;font-weight:700;color:#e3f2fd;transition:color .3s;}
+.card-unit{font-size:16px;color:#64b5f6;margin-left:4px;}
+.card-sub{font-size:12px;color:#607d8b;margin-top:6px;}
+.card-icon{position:absolute;top:16px;right:18px;font-size:28px;opacity:.35;}
+
+/* =====================  BIG GAUGE CARDS  ================ */
+.gauge-card{text-align:center;padding:24px 20px;}
+.gauge-svg{width:140px;height:140px;margin:0 auto 10px;}
+.gauge-bg{fill:none;stroke:#1a2240;stroke-width:12;}
+.gauge-fg{fill:none;stroke-width:12;stroke-linecap:round;transition:stroke-dashoffset .6s ease,stroke .4s;}
+.gauge-text{font-size:28px;font-weight:700;fill:#e3f2fd;}
+.gauge-label{font-size:11px;fill:#90a4ae;text-transform:uppercase;letter-spacing:1px;}
+
+/* =====================  STATUS BADGE  =================== */
+.badge{
+  display:inline-block;padding:5px 14px;border-radius:20px;
+  font-size:13px;font-weight:600;
+}
+.badge.charging{background:#1b5e20;color:#69f0ae;}
+.badge.discharging{background:#b71c1c33;color:#ff5252;}
+.badge.idle{background:#37474f;color:#b0bec5;}
+.badge.balanced{background:#0d47a1;color:#64b5f6;}
+.badge.alert-badge{background:#ff1744;color:#fff;animation:pulse 1s infinite;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* =====================  TIMESTAMP  ====================== */
+.footer{text-align:center;padding:14px;color:#455a64;font-size:12px;}
+#lastUpdate{color:#90a4ae;}
+#msgCount{color:#64b5f6;}
+
+/* =====================  RESPONSIVE  ===================== */
+@media(max-width:600px){
+  .dashboard{grid-template-columns:1fr 1fr;gap:10px;padding:10px;}
+  .card-value{font-size:22px;}
+  .header h1{font-size:18px;}
+}
+</style>
+</head>
+<body>
+
+<!-- ==================  ALERT BANNER  ==================== -->
+<div id="alertBanner">
+  <span class="blink">⚠️</span>
+  <span>HIGH TEMPERATURE ALERT! Battery temp exceeded 35°C – <span id="alertTemp">--</span>°C</span>
+  <span class="blink">⚠️</span>
+</div>
+
+<!-- ==================  HEADER  ========================== -->
+<div class="header" id="mainHeader">
+  <h1>⚡ <span>BMS</span> Dashboard</h1>
+  <div class="status-bar">
+    <span class="conn-dot off" id="connDot"></span>
+    <span id="connText">Disconnected</span>
+  </div>
+</div>
+
+<!-- ==================  DASHBOARD  ======================= -->
+<div class="dashboard">
+
+  <!-- Voltage -->
+  <div class="card" id="cardVolt">
+    <span class="card-icon">🔋</span>
+    <div class="card-label">Bus Voltage</div>
+    <div class="card-value"><span id="vVoltage">--</span><span class="card-unit">V</span></div>
+    <div class="card-sub">ADC Div: <span id="vBattAdc">--</span> V</div>
+  </div>
+
+  <!-- Current -->
+  <div class="card">
+    <span class="card-icon">⚡</span>
+    <div class="card-label">Current</div>
+    <div class="card-value"><span id="vCurrent">--</span><span class="card-unit">mA</span></div>
+    <div class="card-sub">Avg: <span id="vAvgCurrent">--</span> A</div>
+  </div>
+
+  <!-- Power -->
+  <div class="card">
+    <span class="card-icon">💡</span>
+    <div class="card-label">Power</div>
+    <div class="card-value"><span id="vPower">--</span><span class="card-unit">mW</span></div>
+    <div class="card-sub">Energy: <span id="vEnergy">--</span> Wh</div>
+  </div>
+
+  <!-- Temperature -->
+  <div class="card" id="cardTemp">
+    <span class="card-icon">🌡️</span>
+    <div class="card-label">Temperature</div>
+    <div class="card-value"><span id="vTemp">--</span><span class="card-unit">°C</span></div>
+    <div class="card-sub">Max: <span id="vMaxTemp">--</span> °C</div>
+  </div>
+
+  <!-- SOC Gauge -->
+  <div class="card gauge-card">
+    <div class="card-label">State of Charge</div>
+    <svg class="gauge-svg" viewBox="0 0 140 140">
+      <circle class="gauge-bg" cx="70" cy="70" r="58"/>
+      <circle class="gauge-fg" id="socRing" cx="70" cy="70" r="58"
+              stroke="#4caf50" stroke-dasharray="364.42" stroke-dashoffset="364.42"
+              transform="rotate(-90 70 70)"/>
+      <text class="gauge-text" x="70" y="66" text-anchor="middle" id="vSoc">--</text>
+      <text class="gauge-label" x="70" y="86" text-anchor="middle">SOC %</text>
+    </svg>
+  </div>
+
+  <!-- SOH Gauge -->
+  <div class="card gauge-card">
+    <div class="card-label">State of Health</div>
+    <svg class="gauge-svg" viewBox="0 0 140 140">
+      <circle class="gauge-bg" cx="70" cy="70" r="58"/>
+      <circle class="gauge-fg" id="sohRing" cx="70" cy="70" r="58"
+              stroke="#2196f3" stroke-dasharray="364.42" stroke-dashoffset="364.42"
+              transform="rotate(-90 70 70)"/>
+      <text class="gauge-text" x="70" y="66" text-anchor="middle" id="vSoh">--</text>
+      <text class="gauge-label" x="70" y="86" text-anchor="middle">SOH %</text>
+    </svg>
+  </div>
+
+  <!-- Peak Voltage -->
+  <div class="card">
+    <span class="card-icon">📈</span>
+    <div class="card-label">Peak Voltage</div>
+    <div class="card-value"><span id="vPeakV">--</span><span class="card-unit">V</span></div>
+    <div class="card-sub">Avg: <span id="vAvgV">--</span> V &nbsp;|&nbsp; Min: <span id="vMinV">--</span> V</div>
+  </div>
+
+  <!-- Peak Current -->
+  <div class="card">
+    <span class="card-icon">📈</span>
+    <div class="card-label">Peak Current</div>
+    <div class="card-value"><span id="vPeakI">--</span><span class="card-unit">mA</span></div>
+    <div class="card-sub">Disch Rate: <span id="vDischRate">--</span> mA</div>
+  </div>
+
+  <!-- Capacity -->
+  <div class="card">
+    <span class="card-icon">🔌</span>
+    <div class="card-label">Capacity</div>
+    <div class="card-value"><span id="vRemainCap">--</span><span class="card-unit">Ah</span></div>
+    <div class="card-sub">Total: <span id="vCapacity">--</span> Ah</div>
+  </div>
+
+  <!-- Battery Life -->
+  <div class="card">
+    <span class="card-icon">⏳</span>
+    <div class="card-label">Battery Life Est.</div>
+    <div class="card-value"><span id="vBattLife">--</span><span class="card-unit">Yr</span></div>
+    <div class="card-sub">Self-Discharge: <span id="vSelfDisch">--</span> %/mo</div>
+  </div>
+
+  <!-- Cycle Count -->
+  <div class="card">
+    <span class="card-icon">🔄</span>
+    <div class="card-label">Cycle Count</div>
+    <div class="card-value"><span id="vCycles">--</span></div>
+    <div class="card-sub">Coulomb: <span id="vCoulomb">--</span> Ah</div>
+  </div>
+
+  <!-- Internal Resistance -->
+  <div class="card">
+    <span class="card-icon">Ω</span>
+    <div class="card-label">Internal Resistance</div>
+    <div class="card-value"><span id="vIR">--</span><span class="card-unit">mΩ</span></div>
+  </div>
+
+  <!-- Charge Status -->
+  <div class="card">
+    <span class="card-icon">🔌</span>
+    <div class="card-label">Charge Status</div>
+    <div class="card-value"><span class="badge idle" id="vStatus">--</span></div>
+    <div class="card-sub">Cell Balance: <span class="badge balanced" id="vCellBal">--</span></div>
+  </div>
+
+</div><!-- /dashboard -->
+
+<!-- ==================  FOOTER  ========================== -->
+<div class="footer">
+  Last update: <span id="lastUpdate">--</span> &nbsp;|&nbsp;
+  Messages: <span id="msgCount">0</span> &nbsp;|&nbsp;
+  Rate: <span id="msgRate">0</span> msg/s
+</div>
+
+<!-- ==================  AUDIO ALERT  ===================== -->
+<audio id="alertAudio" loop>
+  <source src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=" type="audio/wav">
+</audio>
+
+<script>
+/* ==========================================================
+   MQTT  WebSocket  connection  to  EMQX  Cloud
+   ========================================================== */
+const MQTT_URL  = 'wss://u660b616.ala.eu-central-1.emqxsl.com:8084/mqtt';
+const MQTT_OPTS = {
+  username      : 'helmet123',
+  password      : 'helmet123',
+  clientId      : 'webBMS_' + Math.random().toString(16).substring(2, 10),
+  clean         : true,
+  reconnectPeriod: 3000,
+  rejectUnauthorized: false
+};
+
+const connDot   = document.getElementById('connDot');
+const connText  = document.getElementById('connText');
+const alertBnr  = document.getElementById('alertBanner');
+const alertTmpE = document.getElementById('alertTemp');
+
+let msgCount    = 0;
+let rateCount   = 0;
+let lastAlertBeep = 0;
+let alertAudioCtx = null;
+let oscillator    = null;
+
+/* —— connect —— */
+const client = mqtt.connect(MQTT_URL, MQTT_OPTS);
+
+client.on('connect', () => {
+  console.log('MQTT connected');
+  connDot.className  = 'conn-dot on';
+  connText.textContent = 'Connected';
+  client.subscribe('bms/#', {qos: 0});
+});
+
+client.on('offline', () => {
+  connDot.className  = 'conn-dot off';
+  connText.textContent = 'Disconnected';
+});
+
+client.on('error', (e) => {
+  console.error('MQTT error', e);
+  connDot.className  = 'conn-dot off';
+  connText.textContent = 'Error';
+});
+
+client.on('reconnect', () => {
+  connText.textContent = 'Reconnecting…';
+});
+
+/* —— message handler —— */
+client.on('message', (topic, message) => {
+  msgCount++;
+  rateCount++;
+  document.getElementById('msgCount').textContent = msgCount;
+
+  try {
+    const d = JSON.parse(message.toString());
+
+    if (topic === 'bms/data') {
+      updateDashboard(d);
+    }
+    if (topic === 'bms/alert' || d.alert === true) {
+      showAlert(d.temperature || d.temp);
+    } else {
+      hideAlert();
+    }
+  } catch(e) {
+    console.warn('Parse error', e);
+  }
+});
+
+/* —— msg-rate counter —— */
+setInterval(() => {
+  document.getElementById('msgRate').textContent = rateCount;
+  rateCount = 0;
+}, 1000);
+
+/* ==========================================================
+   UPDATE  DASHBOARD
+   ========================================================== */
+function updateDashboard(d) {
+  setText('vVoltage',   d.voltage?.toFixed(2));
+  setText('vCurrent',   d.current?.toFixed(1));
+  setText('vPower',     d.power?.toFixed(1));
+  setText('vTemp',      d.temperature?.toFixed(1));
+  setText('vPeakV',     d.peakVoltage?.toFixed(2));
+  setText('vPeakI',     d.peakCurrent?.toFixed(1));
+  setText('vSoc',       d.soc?.toFixed(1));
+  setText('vSoh',       d.soh?.toFixed(1));
+  setText('vEnergy',    d.energy?.toFixed(2));
+  setText('vCapacity',  d.capacity?.toFixed(2));
+  setText('vRemainCap', d.remainCap?.toFixed(2));
+  setText('vIR',        (d.internalRes * 1000)?.toFixed(1));
+  setText('vCycles',    d.cycleCount);
+  setText('vBattLife',  d.batteryLife?.toFixed(1));
+  setText('vAvgV',      d.avgVoltage?.toFixed(2));
+  setText('vAvgCurrent',d.avgCurrent?.toFixed(3));
+  setText('vMinV',      d.minVoltage?.toFixed(2));
+  setText('vMaxTemp',   d.maxTemp?.toFixed(1));
+  setText('vDischRate', d.dischRate?.toFixed(0));
+  setText('vSelfDisch', d.selfDischarge?.toFixed(3));
+  setText('vCoulomb',   d.coulomb?.toFixed(3));
+  setText('vBattAdc',   d.battAdcV?.toFixed(2));
+
+  // SOC ring
+  setGauge('socRing', d.soc, getSocColor(d.soc));
+  // SOH ring
+  setGauge('sohRing', d.soh, getSohColor(d.soh));
+
+  // Charge status badge
+  const statusEl = document.getElementById('vStatus');
+  statusEl.textContent = d.chargeStatus || '--';
+  statusEl.className = 'badge ' + (d.chargeStatus||'').toLowerCase();
+
+  // Cell balance badge
+  const cellEl = document.getElementById('vCellBal');
+  cellEl.textContent = d.cellBalance || '--';
+  cellEl.className = 'badge balanced';
+
+  // Temperature card color
+  const tempCard = document.getElementById('cardTemp');
+  if (d.temperature > 35) {
+    tempCard.classList.add('alert-card');
+    document.getElementById('vTemp').style.color = '#ff1744';
+  } else if (d.temperature > 30) {
+    tempCard.classList.remove('alert-card');
+    document.getElementById('vTemp').style.color = '#ff9800';
+  } else {
+    tempCard.classList.remove('alert-card');
+    document.getElementById('vTemp').style.color = '#4caf50';
+  }
+
+  // Timestamp
+  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+}
+
+/* ==========================================================
+   HELPERS
+   ========================================================== */
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el && val !== undefined && val !== null) el.textContent = val;
+}
+
+function setGauge(id, pct, color) {
+  const circ = document.getElementById(id);
+  if (!circ) return;
+  const p = Math.max(0, Math.min(100, pct || 0));
+  const circumference = 364.42;
+  circ.style.strokeDashoffset = circumference - (circumference * p / 100);
+  circ.style.stroke = color;
+}
+
+function getSocColor(v) {
+  if (v > 60) return '#4caf50';
+  if (v > 30) return '#ff9800';
+  return '#ff1744';
+}
+function getSohColor(v) {
+  if (v > 80) return '#2196f3';
+  if (v > 60) return '#ff9800';
+  return '#ff1744';
+}
+
+/* ==========================================================
+   ALERT  SYSTEM  (visual  +  beep)
+   ========================================================== */
+function showAlert(temp) {
+  alertBnr.classList.add('show');
+  alertTmpE.textContent = temp?.toFixed(1) || '--';
+  document.getElementById('mainHeader').style.marginTop = '52px';
+  startBeep();
+}
+
+function hideAlert() {
+  alertBnr.classList.remove('show');
+  document.getElementById('mainHeader').style.marginTop = '0';
+  stopBeep();
+}
+
+function startBeep() {
+  if (oscillator) return;
+  try {
+    alertAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    oscillator = alertAudioCtx.createOscillator();
+    const gain = alertAudioCtx.createGain();
+    oscillator.type = 'square';
+    oscillator.frequency.value = 1000;
+    gain.gain.value = 0.08;
+    oscillator.connect(gain).connect(alertAudioCtx.destination);
+    oscillator.start();
+    // beep pattern
+    const now = alertAudioCtx.currentTime;
+    for (let i = 0; i < 200; i++) {
+      gain.gain.setValueAtTime(0.08, now + i * 0.6);
+      gain.gain.setValueAtTime(0,    now + i * 0.6 + 0.3);
+    }
+  } catch(e) { console.warn('Audio not available', e); }
+}
+
+function stopBeep() {
+  if (oscillator) {
+    try { oscillator.stop(); } catch(e) {}
+    oscillator = null;
+  }
+  if (alertAudioCtx) {
+    try { alertAudioCtx.close(); } catch(e) {}
+    alertAudioCtx = null;
+  }
+}
+</script>
+</body>
+</html>
